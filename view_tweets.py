@@ -138,7 +138,9 @@ def search_tweets(use_mock=False, logger=None):
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
             """
-            SELECT monitor_id, keywords FROM monitor_settings
+            SELECT monitor_id, user_id, monitor_name, keywords, notify_email,
+                   is_enabled, created_at, updated_at
+            FROM monitor_settings
             WHERE is_enabled = TRUE
             ORDER BY monitor_id
             """
