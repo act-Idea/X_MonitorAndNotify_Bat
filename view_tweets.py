@@ -32,7 +32,7 @@ BEARER = os.getenv("X_BEARER_TOKEN")
 SEARCH_URL = "https://api.twitter.com/2/tweets/search/recent"
 
 # スタブファイルのパス
-STUB_FILE = Path("stub_tweet.json")
+STUB_FILE = Path(__file__).parent / "stub_tweet.json"
 
 # ヘッダに Bearer Token を設定
 headers = {
@@ -120,74 +120,106 @@ def save_tweets_to_db(tweets_data, logger=None):
     return success_count, fail_count
 
 
-def search_tweets(query, use_mock=False, logger=None):
+def search_tweets(use_mock=False, logger=None):
     """
-    ツイートを検索する関数。
-    query: 検索ワード
+    有効なモニター設定からキーワードを取得し、ツイートを検索する。
     use_mock: Trueならスタブデータを使用
     logger: ロギングオブジェクト
-    戻り値: (data, error_message, rate_limit_seconds)
+    戻り値: (results_list, errors_list)
+    results_list: [{'monitor_id': 1, 'keywords': [...], 'data': {...}}, ...]
+    errors_list: エラーメッセージのリスト
     """
-    if not query:
-        msg = "[ERROR] 検索ワードが指定されていません。"
+    results = []
+    errors = []
+    
+    # DBから有効なモニター設定を取得
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT monitor_id, keywords FROM monitor_settings
+            WHERE is_enabled = TRUE
+            ORDER BY monitor_id
+            """
+        )
+        monitors = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        if not monitors:
+            msg = "[WARNING] 有効なモニター設定がありません。"
+            if logger:
+                logger.warning(msg)
+            errors.append(msg)
+            return results, errors
+        
+    except Exception as e:
+        msg = f"[ERROR] DBからモニター設定取得失敗: {str(e)}"
         if logger:
             logger.error(msg)
-        return None, msg, None
-
-    # 検索条件
-    params = {
-        "query": query,
-        "max_results": 10,
-        "tweet.fields": "public_metrics",
-        "user.fields": "id,name,username,profile_image_url,verified,created_at"
-    }
-
-    # モックモードの判定
-    if use_mock or STUB_FILE.exists():
-        # スタブデータを使う
-        try:
-            with open(STUB_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            msg = "[INFO] MOCK MODE ENABLED (API is not called)"
-            if logger:
-                logger.info(msg)
-            print(msg)
-            return data, None, None
-        except FileNotFoundError:
-            if use_mock:
-                msg = "[WARNING] stub_tweets.json not found, falling back to API call"
+        errors.append(msg)
+        return results, errors
+    
+    # 各モニターごとにツイートを検索
+    for monitor in monitors:
+        monitor_id = monitor['monitor_id']
+        keywords = monitor['keywords'] if isinstance(monitor['keywords'], list) else json.loads(monitor['keywords'])
+        query = " OR ".join(keywords)
+        
+        if logger:
+            logger.info(f"モニターID {monitor_id}: キーワード={keywords}")
+        
+        # 検索条件
+        params = {
+            "query": query,
+            "max_results": 10,
+            "tweet.fields": "public_metrics",
+            "user.fields": "id,name,username,profile_image_url,verified,created_at"
+        }
+        
+        # モックモードの判定
+        if use_mock or STUB_FILE.exists():
+            try:
+                with open(STUB_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
                 if logger:
-                    logger.warning(msg)
-                return None, msg, None
-            use_mock = False
-
-    if not use_mock:
+                    logger.info(f"[MOCK] モニターID {monitor_id}")
+                results.append({'monitor_id': monitor_id, 'keywords': keywords, 'data': data})
+                continue
+            except FileNotFoundError:
+                if not use_mock:
+                    pass
+                else:
+                    msg = f"[WARNING] stub_tweets.json not found"
+                    errors.append(msg)
+                    continue
+        
         # APIを呼び出す
         if logger:
-            logger.info("API呼び出し中...")
+            logger.info(f"API呼び出し中... (モニターID {monitor_id})")
         response = requests.get(SEARCH_URL, headers=headers, params=params)
-
+        
         if response.status_code == 200:
             data = response.json()
             if logger:
-                logger.info("API呼び出し成功")
-            return data, None, None
+                logger.info(f"API呼び出し成功 (モニターID {monitor_id})")
+            results.append({'monitor_id': monitor_id, 'keywords': keywords, 'data': data})
         elif response.status_code == 429:
-            # レート制限に引っかかった場合
             reset_time = int(response.headers.get("x-rate-limit-reset", 0))
             current_time = int(time.time())
             wait_seconds = max(0, reset_time - current_time)
-            wait_minutes = wait_seconds // 60
-            wait_seconds_remainder = wait_seconds % 60
-            error_msg = f"[WARNING] Rate limit reached. Please wait {wait_minutes} minutes and {wait_seconds_remainder} seconds before retrying."
+            error_msg = f"[RATE_LIMIT] モニターID {monitor_id}: {wait_seconds}秒待機が必要"
             if logger:
                 logger.warning(error_msg)
-            return None, error_msg, wait_seconds
+            errors.append(error_msg)
         else:
-            error_msg = f"API呼び出し失敗: {response.text}"
+            error_msg = f"[API_ERROR] モニターID {monitor_id}: {response.text}"
             if logger:
                 logger.error(error_msg)
-            return None, error_msg, None
+            errors.append(error_msg)
+    
+    return results, errors
 
 
 # コマンドライン実行用
@@ -206,32 +238,39 @@ if __name__ == "__main__":
     
     logger.info("=" * 50)
     logger.info("ツイート検索処理開始")
-    
-    # 検索ワード（固定値）
-    query = "python"
-    logger.info(f"検索ワード: {query}")
 
     use_mock = "--mock" in sys.argv
     logger.info(f"モックモード: {use_mock}")
 
-    data, error, rate_limit_seconds = search_tweets(query, use_mock, logger)
+    results, errors = search_tweets(use_mock, logger)
 
-    if error:
-        logger.error(error)
-        if rate_limit_seconds:
-            logger.error(f"RATELIMIT_SECONDS:{rate_limit_seconds}")
-            print(f"RATELIMIT_SECONDS:{rate_limit_seconds}")
-        sys.exit(1)
+    # エラー出力
+    if errors:
+        for error in errors:
+            logger.error(error)
+
+    # 結果処理
+    if results:
+        logger.info(f"検索完了: {len(results)}件のモニター結果を取得")
+        for result in results:
+            monitor_id = result['monitor_id']
+            keywords = result['keywords']
+            data = result['data']
+            
+            logger.info(f"--- モニターID {monitor_id} (キーワード: {keywords}) ---")
+            
+            # JSON出力
+            result_json = json.dumps(data, indent=4, ensure_ascii=False)
+            print(result_json)
+            
+            # DBに登録
+            logger.info(f"DBへの登録を開始... (モニターID {monitor_id})")
+            success, fail = save_tweets_to_db(data, logger)
+            logger.info(f"DB登録結果 - 成功: {success}件, 失敗: {fail}件")
     else:
-        result_json = json.dumps(data, indent=4, ensure_ascii=False)
-        logger.info("検索結果:")
-        logger.info(result_json)
-        print(result_json)
-        
-        # DBに登録
-        logger.info("DBへの登録を開始します...")
-        success, fail = save_tweets_to_db(data, logger)
-        logger.info(f"DB登録結果 - 成功: {success}件, 失敗: {fail}件")
+        logger.warning("取得できた検索結果がありません。")
+        if errors:
+            sys.exit(1)
     
     logger.info("ツイート検索処理終了")
     logger.info("=" * 50)
