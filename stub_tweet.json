@@ -2,25 +2,39 @@
   "data": [
     {
       "id": "2000000000000001",
-      "text": "OASISのライブ最高すぎた。再結成は正義。",
+      "text": "ぽこあぽけもんの新しいぬいぐるみ、めっちゃかわいい！発売日が待ちきれない。",
       "author_id": "1234567890",
       "public_metrics": {
-        "retweet_count": 12,
-        "reply_count": 3,
-        "like_count": 128,
-        "quote_count": 2
-      }
+        "retweet_count": 18,
+        "reply_count": 5,
+        "like_count": 210,
+        "quote_count": 4
+      },
+      "hashtags": ["ぽこあぽけもん", "ぬいぐるみ", "新作"]
     },
     {
       "id": "2000000000000002",
-      "text": "OASISのTシャツ買えなかった…泣",
+      "text": "今日はぽこあぽけもんのイベントで限定ステッカーGET！みんなで集まるの最高だった。",
       "author_id": "1234567890",
       "public_metrics": {
-        "retweet_count": 4,
+        "retweet_count": 7,
+        "reply_count": 2,
+        "like_count": 89,
+        "quote_count": 1
+      },
+      "hashtags": ["ぽこあぽけもん", "イベント", "限定"]
+    },
+    {
+      "id": "2000000000000003",
+      "text": "ぽこあぽけもんの新作ゲーム、連休中にプレイ予定。コレクションアイテムも楽しみ！",
+      "author_id": "1234567890",
+      "public_metrics": {
+        "retweet_count": 5,
         "reply_count": 1,
-        "like_count": 56,
+        "like_count": 72,
         "quote_count": 0
-      }
+      },
+      "hashtags": ["ぽこあぽけもん", "ゲーム", "連休"]
     }
   ],
   "includes": {
@@ -32,6 +46,6 @@
     ]
   },
   "meta": {
-    "result_count": 2
+    "result_count": 3
   }
 }

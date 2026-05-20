@@ -7,6 +7,11 @@ from pathlib import Path
 import logging
 import psycopg2
 import psycopg2.extras
+from dotenv import load_dotenv
+
+# .env ファイルを明示的に読み込む
+env_file = Path(__file__).parent / ".env"
+load_dotenv(env_file)
 
 
 # 標準出力/標準エラーのエンコーディングを UTF-8 に設定し、
@@ -48,10 +53,11 @@ def get_db_connection():
     return psycopg2.connect(dsn)
 
 
-def save_tweets_to_db(tweets_data, logger=None):
+def save_tweets_to_db(tweets_data, monitor, logger=None):
     """
     ツイートデータをDBに登録する。
     tweets_data: APIから返されたJSONデータ
+    monitor: モニター設定辞書 {'monitor_id': ..., 'user_id': ..., ...}
     logger: ロギングオブジェクト
     戻り値: (成功件数, 失敗件数)
     """
@@ -68,40 +74,52 @@ def save_tweets_to_db(tweets_data, logger=None):
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
+        # 現在の最大 result_id を取得して次の値を計算
+        cur.execute("SELECT COALESCE(MAX(result_id), 0) + 1 as next_id FROM monitor_results")
+        next_result_id = cur.fetchone()['next_id']
+        
         for tweet in tweets_data.get('data', []):
             try:
                 tweet_id = tweet.get('id')
                 text = tweet.get('text')
                 author_id = tweet.get('author_id')
                 
-                # public_metrics を JSON 形式で保存
-                public_metrics = tweet.get('public_metrics', {})
-                retweet_count = public_metrics.get('retweet_count', 0)
-                reply_count = public_metrics.get('reply_count', 0)
-                like_count = public_metrics.get('like_count', 0)
-                quote_count = public_metrics.get('quote_count', 0)
+                # user_handle は includes.users から取得
+                user_handle = None
+                includes = tweets_data.get('includes', {})
+                for user in includes.get('users', []):
+                    if user.get('id') == author_id:
+                        user_handle = user.get('username')
+                        break
                 
-                # ツイートを tweets テーブルに登録（既に存在する場合は更新）
+                # ツイート情報を monitor_results テーブルに登録
+                post_url = f"https://twitter.com/{user_handle}/status/{tweet_id}" if user_handle else None
+                hashtags = tweet.get('hashtags')
                 cur.execute(
                     """
-                    INSERT INTO tweets (tweet_id, text, author_id, retweet_count, reply_count, like_count, quote_count, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                    ON CONFLICT (tweet_id) DO UPDATE
-                    SET retweet_count = EXCLUDED.retweet_count,
-                        reply_count = EXCLUDED.reply_count,
-                        like_count = EXCLUDED.like_count,
-                        quote_count = EXCLUDED.quote_count,
-                        updated_at = NOW()
+                    INSERT INTO monitor_results (result_id, monitor_id, user_id, post_id, user_handle, content, hashtags, post_url, posted_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (result_id, monitor_id, user_id) DO NOTHING
                     """,
-                    (tweet_id, text, author_id, retweet_count, reply_count, like_count, quote_count)
+                    (next_result_id, monitor['monitor_id'], monitor['user_id'], tweet_id, user_handle, text, json.dumps(hashtags, ensure_ascii=False) if hashtags is not None else None, post_url)
                 )
-                success_count += 1
-                if logger:
-                    logger.info(f"ツイート保存成功: {tweet_id}")
+                
+                if cur.rowcount > 0:
+                    success_count += 1
+                    if logger:
+                        logger.info(f"ツイート保存成功: {tweet_id}")
+                else:
+                    fail_count += 1
+                    if logger:
+                        logger.warning(f"ツイート重複スキップ: {tweet_id}")
+                        
+                next_result_id += 1  # 次のツイート用にインクリメント
                     
             except Exception as e:
                 fail_count += 1
-                msg = f"ツイート保存失敗 ({tweet.get('id')}): {str(e)}"
+                import traceback
+                error_detail = traceback.format_exc()
+                msg = f"ツイート保存失敗 ({tweet.get('id')}): {str(e)}\n{error_detail}"
                 if logger:
                     logger.error(msg)
         
@@ -187,7 +205,7 @@ def search_tweets(use_mock=False, logger=None):
                     data = json.load(f)
                 if logger:
                     logger.info(f"[MOCK] モニターID {monitor_id}")
-                results.append({'monitor_id': monitor_id, 'keywords': keywords, 'data': data})
+                results.append({'monitor': monitor, 'keywords': keywords, 'data': data})
                 continue
             except FileNotFoundError:
                 if not use_mock:
@@ -206,7 +224,7 @@ def search_tweets(use_mock=False, logger=None):
             data = response.json()
             if logger:
                 logger.info(f"API呼び出し成功 (モニターID {monitor_id})")
-            results.append({'monitor_id': monitor_id, 'keywords': keywords, 'data': data})
+            results.append({'monitor': monitor, 'keywords': keywords, 'data': data})
         elif response.status_code == 429:
             reset_time = int(response.headers.get("x-rate-limit-reset", 0))
             current_time = int(time.time())
@@ -255,7 +273,8 @@ if __name__ == "__main__":
     if results:
         logger.info(f"検索完了: {len(results)}件のモニター結果を取得")
         for result in results:
-            monitor_id = result['monitor_id']
+            monitor = result['monitor']
+            monitor_id = monitor['monitor_id']
             keywords = result['keywords']
             data = result['data']
             
@@ -267,7 +286,7 @@ if __name__ == "__main__":
             
             # DBに登録
             logger.info(f"DBへの登録を開始... (モニターID {monitor_id})")
-            success, fail = save_tweets_to_db(data, logger)
+            success, fail = save_tweets_to_db(data, monitor, logger)
             logger.info(f"DB登録結果 - 成功: {success}件, 失敗: {fail}件")
     else:
         logger.warning("取得できた検索結果がありません。")
