@@ -138,7 +138,7 @@ def save_tweets_to_db(tweets_data, monitor, logger=None):
     return success_count, fail_count
 
 
-def search_tweets(use_mock=False, logger=None):
+def search_tweets(logger=None):
     """
     有効なモニター設定からキーワードを取得し、ツイートを検索する。
     use_mock: Trueならスタブデータを使用
@@ -198,8 +198,8 @@ def search_tweets(use_mock=False, logger=None):
             "user.fields": "id,name,username,profile_image_url,verified,created_at"
         }
         
-        # モックモードの判定
-        if use_mock or STUB_FILE.exists():
+        # モックモードの判定：スタブファイルが存在すればモックを使用
+        if STUB_FILE.exists():
             try:
                 with open(STUB_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -208,12 +208,12 @@ def search_tweets(use_mock=False, logger=None):
                 results.append({'monitor': monitor, 'keywords': keywords, 'data': data})
                 continue
             except FileNotFoundError:
-                if not use_mock:
-                    pass
-                else:
-                    msg = f"[WARNING] stub_tweets.json not found"
-                    errors.append(msg)
-                    continue
+                # ファイルが見つからない場合は次のモニターへ（STUB_FILE.exists() と矛盾する場合はここに到達）
+                msg = f"[WARNING] {STUB_FILE} not found"
+                if logger:
+                    logger.warning(msg)
+                errors.append(msg)
+                continue
         
         # APIを呼び出す
         if logger:
@@ -242,56 +242,5 @@ def search_tweets(use_mock=False, logger=None):
     return results, errors
 
 
-# コマンドライン実行用
-if __name__ == "__main__":
-    # ログ設定
-    log_file = "view_tweets.log"
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler(log_file, encoding="utf-8"),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-    logger = logging.getLogger(__name__)
-    
-    logger.info("=" * 50)
-    logger.info("ツイート検索処理開始")
-
-    use_mock = "--mock" in sys.argv
-    logger.info(f"モックモード: {use_mock}")
-
-    results, errors = search_tweets(use_mock, logger)
-
-    # エラー出力
-    if errors:
-        for error in errors:
-            logger.error(error)
-
-    # 結果処理
-    if results:
-        logger.info(f"検索完了: {len(results)}件のモニター結果を取得")
-        for result in results:
-            monitor = result['monitor']
-            monitor_id = monitor['monitor_id']
-            keywords = result['keywords']
-            data = result['data']
-            
-            logger.info(f"--- モニターID {monitor_id} (キーワード: {keywords}) ---")
-            
-            # JSON出力
-            result_json = json.dumps(data, indent=4, ensure_ascii=False)
-            print(result_json)
-            
-            # DBに登録
-            logger.info(f"DBへの登録を開始... (モニターID {monitor_id})")
-            success, fail = save_tweets_to_db(data, monitor, logger)
-            logger.info(f"DB登録結果 - 成功: {success}件, 失敗: {fail}件")
-    else:
-        logger.warning("取得できた検索結果がありません。")
-        if errors:
-            sys.exit(1)
-    
-    logger.info("ツイート検索処理終了")
-    logger.info("=" * 50)
+# CLI/entrypoint has been moved to `main.py`.
+# Keep this module focused on functions: get_db_connection, search_tweets, save_tweets_to_db
