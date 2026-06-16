@@ -46,10 +46,11 @@ def send_email(to: str, subject: str, body: str):
 
 
 def send_monitor_notification(monitor_id: int):
-    """monitor_id を受け取り、monitor_settings からメール送信する"""
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # monitor_settings を取得（monitor_id + user_id で安全に絞る）
         cur.execute(
             """
             SELECT *
@@ -59,21 +60,72 @@ def send_monitor_notification(monitor_id: int):
             (monitor_id,)
         )
         monitor_data = cur.fetchone()
+
+        if not monitor_data:
+            print("monitor_settings が見つかりません")
+            return
+
+        user_id = monitor_data["user_id"]
+
+        # 最新の result を取得（monitor_id + user_id）
+        cur.execute(
+            """
+            SELECT *
+            FROM monitor_results
+            WHERE monitor_id = %s AND user_id = %s
+            ORDER BY result_id DESC
+            LIMIT 1
+            """,
+            (monitor_id, user_id)
+        )
+        result = cur.fetchone()
+
         cur.close()
         conn.close()
 
-        if monitor_data and monitor_data["notify_email"]:
+        if not result:
+            print("該当する result がありません（通知なし）")
+            return
+
+        # 通知メール送信
+        if monitor_data["notify_email"]:
             to = monitor_data["notify_email"]
             subject = f"X自動検索・通知システム {monitor_data['monitor_name']}"
-            body = f"モニター「{monitor_data['monitor_name']}」の通知です。"
+
+            body = (
+                f"モニター「{monitor_data['monitor_name']}」で条件に合う投稿が見つかりましたのでお知らせします。\n"
+                f"\n"
+                f"■ 投稿者\n"
+                f"{result['user_handle']}\n"
+                f"\n"
+                f"■ 投稿内容\n"
+                f"{result['content']}\n"
+                f"\n"
+                f"■ ハッシュタグ\n"
+                f"{result['hashtags']}\n"
+                f"\n"
+                f"■ 投稿リンク\n"
+                f"{result['post_url']}\n"
+                f"\n"
+                f"■ 投稿日時\n"
+                f"{result['posted_at']}\n"
+                f"\n"
+                f"■ 検知日時\n"
+                f"{result['detected_at']}\n"
+                f"\n"
+                f"本メールは自動送信されています。"
+            )
 
             send_email(to, subject, body)
             print("通知メール送信成功！")
+
         else:
-            print(f"monitor_id={monitor_id} のデータが無いか notify_email が未設定です。")
+            print(f"monitor_id={monitor_id} の notify_email が未設定です。")
 
     except Exception as e:
         print(f"メール送信エラー: {e}")
+
+
 
 if __name__ == "__main__":
     import sys
