@@ -4,9 +4,11 @@ import psycopg2
 import psycopg2.extras
 from email.message import EmailMessage
 from dotenv import load_dotenv
+from pathlib import Path
 
-# .env 読み込み
-load_dotenv()
+# .env_bat 読み込み
+env_file = Path(__file__).parent / ".env_bat"
+load_dotenv(env_file)
 
 # SMTP設定
 SMTP_HOST = os.getenv("SMTP_HOST", "localhost")
