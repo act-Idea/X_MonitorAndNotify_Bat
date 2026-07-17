@@ -10,7 +10,7 @@ import psycopg2.extras
 from dotenv import load_dotenv
 
 # .env ファイルを明示的に読み込む
-env_file = Path(__file__).parent / ".env"
+env_file = Path(__file__).parent / ".env_app"
 load_dotenv(env_file)
 
 
