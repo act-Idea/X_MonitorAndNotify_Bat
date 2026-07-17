@@ -67,6 +67,7 @@ def send_monitor_notification():
             INNER JOIN monitor_settings
             ON monitor_results.monitor_id = monitor_settings.monitor_id
             WHERE detected_at >= NOW() - INTERVAL '1 day'
+            ORDER BY monitor_results.result_id ASC
             """
         )
         monitor_results = cur.fetchall()
