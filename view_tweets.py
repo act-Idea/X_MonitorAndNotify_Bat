@@ -34,7 +34,7 @@ except Exception:
 BEARER = os.getenv("X_BEARER_TOKEN")
 
 # ツイート検索用URL（公式API v2）
-SEARCH_URL = "https://api.twitter.com/2/tweets/search/recent"
+SEARCH_URL = "https://api.x.com/2/tweets/search/recent"
 
 # スタブファイルのパス
 STUB_FILE = Path(__file__).parent / "stub_tweet.json"
@@ -94,7 +94,7 @@ def save_tweets_to_db(tweets_data, monitor, logger=None):
                 
                 # ツイート情報を monitor_results テーブルに登録
                 post_url = f"https://twitter.com/{user_handle}/status/{tweet_id}" if user_handle else None
-                hashtags = tweet.get('hashtags')
+                hashtags = tweet.get("entities", {}).get("hashtags", [])
                 cur.execute(
                     """
                     INSERT INTO monitor_results (result_id, monitor_id, user_id, post_id, user_handle, content, hashtags, post_url, posted_at)
@@ -194,7 +194,8 @@ def search_tweets(logger=None):
         params = {
             "query": query,
             "max_results": 10,
-            "tweet.fields": "public_metrics",
+            "expansions": "author_id",
+            "tweet.fields": "public_metrics,created_at,entities",
             "user.fields": "id,name,username,profile_image_url,verified,created_at"
         }
         
