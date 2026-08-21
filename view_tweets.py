@@ -103,6 +103,18 @@ def save_tweets_to_db(tweets_data, monitor, logger=None):
                 # ツイート情報を monitor_results テーブルに登録
                 post_url = f"https://twitter.com/{user_handle}/status/{tweet_id}" if user_handle else None
                 hashtags = tweet.get("entities", {}).get("hashtags", [])
+
+                # 同じ post_id のツイートは重複登録しない
+                cur.execute(
+                    "SELECT 1 FROM monitor_results WHERE post_id = %s LIMIT 1",
+                    (tweet_id,)
+                )
+                if cur.fetchone():
+                    fail_count += 1
+                    if logger:
+                        logger.warning(f"ツイート重複スキップ: {tweet_id} (post_id already exists)")
+                    continue
+
                 cur.execute(
                     """
                     INSERT INTO monitor_results (result_id, monitor_id, user_id, post_id, user_handle, content, hashtags, post_url, posted_at)
