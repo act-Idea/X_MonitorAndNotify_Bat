@@ -4,6 +4,7 @@ import requests
 import json   
 import time
 from pathlib import Path
+from datetime import datetime
 import logging
 import psycopg2
 import psycopg2.extras
@@ -83,6 +84,13 @@ def save_tweets_to_db(tweets_data, monitor, logger=None):
                 tweet_id = tweet.get('id')
                 text = tweet.get('text')
                 author_id = tweet.get('author_id')
+                created_at = tweet.get('created_at')
+                created_at_dt = None
+                if created_at:
+                    try:
+                        created_at_dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    except ValueError:
+                        created_at_dt = None
                 
                 # user_handle は includes.users から取得
                 user_handle = None
@@ -98,10 +106,10 @@ def save_tweets_to_db(tweets_data, monitor, logger=None):
                 cur.execute(
                     """
                     INSERT INTO monitor_results (result_id, monitor_id, user_id, post_id, user_handle, content, hashtags, post_url, posted_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (result_id, monitor_id, user_id) DO NOTHING
                     """,
-                    (next_result_id, monitor['monitor_id'], monitor['user_id'], tweet_id, user_handle, text, json.dumps(hashtags, ensure_ascii=False) if hashtags is not None else None, post_url)
+                    (next_result_id, monitor['monitor_id'], monitor['user_id'], tweet_id, user_handle, text, json.dumps(hashtags, ensure_ascii=False) if hashtags is not None else None, post_url, created_at_dt)
                 )
                 
                 if cur.rowcount > 0:
