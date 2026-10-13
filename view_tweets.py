@@ -212,7 +212,7 @@ def save_tweets_to_db(tweets_data, monitor, logger=None):
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
                     ON CONFLICT (result_id, monitor_id, user_id) DO NOTHING
                     """,
-                    (next_result_id, monitor['monitor_id'], monitor['user_id'], tweet_id, user_handle, text, json.dumps(hashtags, ensure_ascii=False) if hashtags else None, json.dumps(image_urls, ensure_ascii=False) if image_urls else None, post_url, created_at_dt)
+                    (next_result_id, monitor['monitor_id'], monitor['user_id'], tweet_id, user_handle, text, json.dumps(hashtags, ensure_ascii=False) if hashtags else None, json.dumps(image_urls, ensure_ascii=False), post_url, created_at_dt)
                 )
                 
                 if cur.rowcount > 0:
