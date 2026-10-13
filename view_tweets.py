@@ -1,7 +1,8 @@
 import os
 import sys
 import requests
-import json   
+import json
+import re
 import time
 from pathlib import Path
 from datetime import datetime
@@ -11,7 +12,7 @@ import psycopg2.extras
 from dotenv import load_dotenv
 
 # .env ファイルを明示的に読み込む
-env_file = Path(__file__).parent / ".env_app"
+env_file = Path(__file__).parent / ".env_bat"
 load_dotenv(env_file)
 
 
@@ -52,6 +53,82 @@ def get_db_connection():
     if not dsn:
         raise RuntimeError('SUPABASE_DB_URL is not set')
     return psycopg2.connect(dsn)
+
+
+def normalize_hashtags(raw_hashtags):
+    """
+    X API の entities.hashtags は次のような辞書配列を返す:
+    [{'tag': 'ぽこあポケモン', 'start': 34, 'end': 42}]
+    これを ['ぽこあポケモン'] のようなタグ名一覧に正規化する。
+    """
+    if raw_hashtags is None:
+        return []
+
+    normalized = []
+    seen = set()
+
+    def add_tag(tag_value):
+        if tag_value is None:
+            return
+        tag_text = str(tag_value).strip()
+        if not tag_text:
+            return
+        tag_text = tag_text.lstrip('#').strip()
+        if not tag_text or tag_text.lower() in {'tag', 'start', 'end'}:
+            return
+        # 文字列化された dict から余計な metadata を取り除く
+        tag_text = tag_text.replace("'", "").replace('"', '')
+        tag_text = re.sub(r"[{}\[\]:,]", "", tag_text).strip()
+        if not tag_text:
+            return
+        if tag_text not in seen:
+            seen.add(tag_text)
+            normalized.append(tag_text)
+
+    if isinstance(raw_hashtags, dict):
+        add_tag(raw_hashtags.get('tag'))
+        return normalized
+
+    if isinstance(raw_hashtags, str):
+        value = raw_hashtags.strip()
+        if not value:
+            return []
+
+        # 既に JSON 文字列の場合は再解釈して処理
+        if value.startswith('{') or value.startswith('['):
+            try:
+                parsed = json.loads(value)
+                return normalize_hashtags(parsed)
+            except (TypeError, ValueError):
+                pass
+
+        # 例: "#{'end': 42, 'tag': 'ぽこあポケモン', 'start': 34}"
+        for match in re.findall(r"'tag'\s*:\s*'([^']+)'", value):
+            add_tag(match)
+        if normalized:
+            return normalized
+
+        for token in re.split(r"[\s,]+", value):
+            if not token:
+                continue
+            add_tag(token)
+        return normalized
+
+    if isinstance(raw_hashtags, (list, tuple)):
+        for item in raw_hashtags:
+            if isinstance(item, dict):
+                add_tag(item.get('tag'))
+            elif isinstance(item, str):
+                for candidate in re.findall(r"'tag'\s*:\s*'([^']+)'", item):
+                    add_tag(candidate)
+                if not any(candidate for candidate in [item]):
+                    add_tag(item)
+            else:
+                add_tag(item)
+        return normalized
+
+    add_tag(raw_hashtags)
+    return normalized
 
 
 def save_tweets_to_db(tweets_data, monitor, logger=None):
@@ -102,7 +179,7 @@ def save_tweets_to_db(tweets_data, monitor, logger=None):
                 
                 # ツイート情報を monitor_results テーブルに登録
                 post_url = f"https://twitter.com/{user_handle}/status/{tweet_id}" if user_handle else None
-                hashtags = tweet.get("entities", {}).get("hashtags", [])
+                hashtags = normalize_hashtags(tweet.get("entities", {}).get("hashtags", []))
 
                 # 同じ post_id のツイートは重複登録しない
                 cur.execute(
@@ -121,7 +198,7 @@ def save_tweets_to_db(tweets_data, monitor, logger=None):
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (result_id, monitor_id, user_id) DO NOTHING
                     """,
-                    (next_result_id, monitor['monitor_id'], monitor['user_id'], tweet_id, user_handle, text, json.dumps(hashtags, ensure_ascii=False) if hashtags is not None else None, post_url, created_at_dt)
+                    (next_result_id, monitor['monitor_id'], monitor['user_id'], tweet_id, user_handle, text, json.dumps(hashtags, ensure_ascii=False) if hashtags else None, post_url, created_at_dt)
                 )
                 
                 if cur.rowcount > 0:
@@ -212,12 +289,72 @@ def search_tweets(logger=None):
         
         # 検索条件
         params = {
-            "query": query,
-            "max_results": 10,
-            "expansions": "author_id",
-            "tweet.fields": "public_metrics,created_at,entities",
-            "user.fields": "id,name,username,profile_image_url,verified,created_at"
-        }
+    "query": query,
+    "max_results": 10,
+
+    # すべての expansions を展開
+    "expansions": (
+        "author_id,"
+        "referenced_tweets.id,"
+        "referenced_tweets.id.author_id,"
+        "attachments.media_keys,"
+        "entities.mentions.username,"
+        "in_reply_to_user_id,"
+        "geo.place_id"
+    ),
+
+    # ツイートで取得できる全フィールド
+    "tweet.fields": (
+        "attachments,"
+        "author_id,"
+        "context_annotations,"
+        "conversation_id,"
+        "created_at,"
+        "edit_controls,"
+        "entities,"
+        "geo,"
+        "id,"
+        "in_reply_to_user_id,"
+        "lang,"
+        "public_metrics,"
+        "possibly_sensitive,"
+        "referenced_tweets,"
+        "reply_settings,"
+        "source,"
+        "text,"
+        "withheld"
+    ),
+
+    # ユーザーで取得できる全フィールド
+    "user.fields": (
+        "created_at,"
+        "description,"
+        "entities,"
+        "id,"
+        "location,"
+        "name,"
+        "profile_image_url,"
+        "protected,"
+        "public_metrics,"
+        "url,"
+        "username,"
+        "verified,"
+        "withheld"
+    ),
+
+    # メディアで取得できる全フィールド（画像URL含む）
+    "media.fields": (
+        "duration_ms,"
+        "height,"
+        "media_key,"
+        "preview_image_url,"
+        "type,"
+        "url,"
+        "variants,"
+        "width"
+    )
+
+}
         
         # モックモードの判定：スタブファイルが存在すればモックを使用
         if STUB_FILE.exists():
