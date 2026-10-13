@@ -9,7 +9,7 @@ from datetime import datetime
 import logging
 import psycopg2
 import psycopg2.extras
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 # .env ファイルを明示的に読み込む
 env_file = Path(__file__).parent / ".env_bat"
@@ -32,8 +32,8 @@ except Exception:
         # どの方法でも設定できなければ無視（最低限例外は出ないように）
         pass
 
-# 環境変数から Bearer Token を取得
-BEARER = os.getenv("X_BEARER_TOKEN")
+# .env_bat から Bearer Token を直接取得
+BEARER = dotenv_values(env_file).get("X_BEARER_TOKEN")
 
 # ツイート検索用URL（公式API v2）
 SEARCH_URL = "https://api.x.com/2/tweets/search/recent"
@@ -381,7 +381,39 @@ def search_tweets(logger=None):
         if response.status_code == 200:
             data = response.json()
             if logger:
-                logger.info(f"API呼び出し成功 (モニターID {monitor_id})")
+                tweet_count = len(data.get('data', []))
+                logger.info(
+                    f"API取得データ (モニターID {monitor_id}, 件数={tweet_count}):\n"
+                    f"{json.dumps(data, ensure_ascii=False, indent=2)}"
+                )
+                media_by_key = {
+                    media.get('media_key'): media
+                    for media in (data.get('includes') or {}).get('media', [])
+                    if media.get('media_key')
+                }
+                for tweet in data.get('data', []) or []:
+                    tweet_id = tweet.get('id')
+                    media_keys = (tweet.get('attachments') or {}).get('media_keys', [])
+                    for media_key in media_keys:
+                        media = media_by_key.get(media_key)
+                        if not media:
+                            logger.warning(
+                                f"メディア情報なし (モニターID {monitor_id}, "
+                                f"投稿ID {tweet_id}, media_key {media_key})"
+                            )
+                            continue
+
+                        display_url = media.get('url') or media.get('preview_image_url')
+                        if display_url:
+                            logger.info(
+                                f"画像表示用URL (モニターID {monitor_id}, 投稿ID {tweet_id}, "
+                                f"media_key {media_key}, type {media.get('type')}): {display_url}"
+                            )
+                        else:
+                            logger.warning(
+                                f"画像表示用URLなし (モニターID {monitor_id}, "
+                                f"投稿ID {tweet_id}, media_key {media_key})"
+                            )
             results.append({'monitor': monitor, 'keywords': keywords, 'data': data})
         elif response.status_code == 429:
             reset_time = int(response.headers.get("x-rate-limit-reset", 0))
