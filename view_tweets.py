@@ -155,6 +155,13 @@ def save_tweets_to_db(tweets_data, monitor, logger=None):
         # 現在の最大 result_id を取得して次の値を計算
         cur.execute("SELECT COALESCE(MAX(result_id), 0) + 1 as next_id FROM monitor_results")
         next_result_id = cur.fetchone()['next_id']
+
+        includes = tweets_data.get('includes') or {}
+        media_by_key = {
+            media.get('media_key'): media
+            for media in includes.get('media', [])
+            if media.get('media_key')
+        }
         
         for tweet in tweets_data.get('data', []):
             try:
@@ -171,7 +178,6 @@ def save_tweets_to_db(tweets_data, monitor, logger=None):
                 
                 # user_handle は includes.users から取得
                 user_handle = None
-                includes = tweets_data.get('includes', {})
                 for user in includes.get('users', []):
                     if user.get('id') == author_id:
                         user_handle = user.get('username')
@@ -180,6 +186,14 @@ def save_tweets_to_db(tweets_data, monitor, logger=None):
                 # ツイート情報を monitor_results テーブルに登録
                 post_url = f"https://twitter.com/{user_handle}/status/{tweet_id}" if user_handle else None
                 hashtags = normalize_hashtags(tweet.get("entities", {}).get("hashtags", []))
+                image_urls = []
+                media_keys = (tweet.get('attachments') or {}).get('media_keys', [])
+                for media_key in media_keys:
+                    media = media_by_key.get(media_key)
+                    if media:
+                        image_url = media.get('url') or media.get('preview_image_url')
+                        if image_url:
+                            image_urls.append(image_url)
 
                 # 同じ post_id のツイートは重複登録しない
                 cur.execute(
@@ -194,11 +208,11 @@ def save_tweets_to_db(tweets_data, monitor, logger=None):
 
                 cur.execute(
                     """
-                    INSERT INTO monitor_results (result_id, monitor_id, user_id, post_id, user_handle, content, hashtags, post_url, posted_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO monitor_results (result_id, monitor_id, user_id, post_id, user_handle, content, hashtags, image_url, post_url, posted_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
                     ON CONFLICT (result_id, monitor_id, user_id) DO NOTHING
                     """,
-                    (next_result_id, monitor['monitor_id'], monitor['user_id'], tweet_id, user_handle, text, json.dumps(hashtags, ensure_ascii=False) if hashtags else None, post_url, created_at_dt)
+                    (next_result_id, monitor['monitor_id'], monitor['user_id'], tweet_id, user_handle, text, json.dumps(hashtags, ensure_ascii=False) if hashtags else None, json.dumps(image_urls, ensure_ascii=False) if image_urls else None, post_url, created_at_dt)
                 )
                 
                 if cur.rowcount > 0:
@@ -282,7 +296,7 @@ def search_tweets(logger=None):
     for monitor in monitors:
         monitor_id = monitor['monitor_id']
         keywords = monitor['keywords'] if isinstance(monitor['keywords'], list) else json.loads(monitor['keywords'])
-        query = " OR ".join(keywords)
+        query = f"({' OR '.join(keywords)}) -is:retweet"
         
         if logger:
             logger.info(f"モニターID {monitor_id}: キーワード={keywords}")
