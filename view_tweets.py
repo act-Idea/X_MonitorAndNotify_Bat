@@ -194,6 +194,8 @@ def save_tweets_to_db(tweets_data, monitor, logger=None):
                         image_url = media.get('url') or media.get('preview_image_url')
                         if image_url:
                             image_urls.append(image_url)
+                if not image_urls:
+                    image_urls.append("https://thumb.ac-illust.com/ca/cadc0447d26399e707de3072645c9721_t.jpeg")
 
                 # 同じ post_id のツイートは重複登録しない
                 cur.execute(
